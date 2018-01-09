@@ -19,6 +19,7 @@
 extern crate primal;
 extern crate parking_lot;
 extern crate either;
+extern crate faster;
 extern crate memmap;
 
 #[macro_use]

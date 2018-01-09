@@ -24,14 +24,15 @@ use cache::{NodeCache, NodeCacheBuilder};
 use seed_compute::SeedHashCompute;
 use shared::*;
 use std::io;
-
 use std::mem;
 use std::path::Path;
 use std::ptr;
+use faster::prelude::*;
 
 const MIX_WORDS: usize = ETHASH_MIX_BYTES / 4;
 const MIX_NODES: usize = MIX_WORDS / NODE_WORDS;
 const FNV_PRIME: u32 = 0x01000193;
+const FNV_PRIME_VEC: u32s = u32s::new(FNV_PRIME, FNV_PRIME, FNV_PRIME, FNV_PRIME, FNV_PRIME, FNV_PRIME, FNV_PRIME, FNV_PRIME);
 
 /// Computation result
 pub struct ProofOfWork {
@@ -92,6 +93,10 @@ pub fn slow_hash_block_number(block_number: u64) -> H256 {
 
 fn fnv_hash(x: u32, y: u32) -> u32 {
 	return x.wrapping_mul(FNV_PRIME) ^ y;
+}
+
+fn fnv_hash_vec(x: u32s, y: u32s) -> u32s {
+	return x * FNV_PRIME_VEC ^ y;
 }
 
 /// Difficulty quick check for POW preverification
@@ -206,7 +211,7 @@ fn hash_compute(light: &Light, full_size: usize, header_hash: &H256, nonce: u64)
 	let first_val = buf.half_mix.as_words()[0];
 
 	debug_assert_eq!(MIX_NODES, 2);
-	debug_assert_eq!(NODE_WORDS, 16);
+	debug_assert_eq!(NODE_WORDS / u32s::WIDTH, 2);
 
 	for i in 0..ETHASH_ACCESSES as u32 {
 		let index = {
@@ -226,14 +231,15 @@ fn hash_compute(light: &Light, full_size: usize, header_hash: &H256, nonce: u64)
 					cache,
 				);
 
+				// NODE_WORDS / u32s::WIDTH
 				unroll! {
-					// NODE_WORDS
-					for w in 0..16 {
-						mix[n].as_words_mut()[w] =
-							fnv_hash(
-								mix[n].as_words()[w],
-								tmp_node.as_words()[w],
-							);
+					for w in 0..2 {
+						unsafe {
+							let mix_vec = u32s::load_unchecked(mix[n].as_words(), w * u32s::WIDTH);
+							let tmp_vec = u32s::load_unchecked(tmp_node.as_words(), w * u32s::WIDTH);
+							let hash = fnv_hash_vec(mix_vec, tmp_vec);
+							hash.store_unchecked(mix[n].as_words_mut(), w * u32s::WIDTH);
+						}
 					}
 				}
 			}
@@ -252,16 +258,36 @@ fn hash_compute(light: &Light, full_size: usize, header_hash: &H256, nonce: u64)
 
 		// Compress mix
 		debug_assert_eq!(MIX_WORDS / 4, 8);
-		unroll! {
-			for i in 0..8 {
-				let w = i * 4;
 
-				let mut reduction = mix_words[w + 0];
-				reduction = reduction.wrapping_mul(FNV_PRIME) ^ mix_words[w + 1];
-				reduction = reduction.wrapping_mul(FNV_PRIME) ^ mix_words[w + 2];
-				reduction = reduction.wrapping_mul(FNV_PRIME) ^ mix_words[w + 3];
-				compress[i] = reduction;
-			}
+		let steps = {
+			let make_mix_vec = |offset| {
+				u32s::new(
+					mix_words[offset],
+					mix_words[offset + 4],
+					mix_words[offset + 8],
+					mix_words[offset + 12],
+					mix_words[offset + 16],
+					mix_words[offset + 20],
+					mix_words[offset + 24],
+					mix_words[offset + 28],
+				)
+			};
+
+			(
+				make_mix_vec(0),
+				make_mix_vec(1),
+				make_mix_vec(2),
+				make_mix_vec(3),
+			)
+		};
+
+		unsafe {
+			{
+ 				let mut reduction = steps.0;
+				reduction = fnv_hash_vec(reduction, steps.1);
+				reduction = fnv_hash_vec(reduction, steps.2);
+				fnv_hash_vec(reduction, steps.3)
+			}.store_unchecked(compress, 0);
 		}
 	}
 
@@ -287,8 +313,9 @@ fn hash_compute(light: &Light, full_size: usize, header_hash: &H256, nonce: u64)
 
 // TODO: Use the `simd` crate
 fn calculate_dag_item(node_index: u32, cache: &[Node]) -> Node {
-	let num_parent_nodes = cache.len();
-	let mut ret = cache[node_index as usize % num_parent_nodes].clone();
+	let num_parent_nodes = cache.len() as u32;
+
+	let mut ret = cache[(node_index % num_parent_nodes) as usize].clone();
 	ret.as_words_mut()[0] ^= node_index;
 
 	keccak_512::inplace(ret.as_bytes_mut());
@@ -300,8 +327,13 @@ fn calculate_dag_item(node_index: u32, cache: &[Node]) -> Node {
 		let parent = &cache[parent_index as usize];
 
 		unroll! {
-			for w in 0..16 {
-				ret.as_words_mut()[w] = fnv_hash(ret.as_words()[w], parent.as_words()[w]);
+			for w in 0..2 {
+				unsafe {
+					let a = u32s::load_unchecked(ret.as_words(), w * u32s::WIDTH);
+					let b = u32s::load_unchecked(parent.as_words(), w * u32s::WIDTH);
+
+					fnv_hash_vec(a, b).store(ret.as_words_mut(), w * u32s::WIDTH);
+				}
 			}
 		}
 	}
