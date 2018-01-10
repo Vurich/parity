@@ -15,25 +15,24 @@
 // along with Parity.  If not, see <http://www.gnu.org/licenses/>.
 
 #![cfg_attr(feature = "benches", feature(test))]
+#![cfg_attr(feature = "simd", feature(const_fn))]
 
 extern crate primal;
 extern crate parking_lot;
 extern crate either;
 extern crate memmap;
-extern crate typenum;
-extern crate typenum_loops;
 
 #[macro_use]
 extern crate crunchy;
 #[macro_use]
 extern crate log;
 
-#[cfg(features = "simd")]
+#[cfg(feature = "simd")]
 mod compute_simd;
-#[cfg(features = "simd")]
+#[cfg(feature = "simd")]
 use self::compute_simd as compute;
 
-#[cfg(not(features = "simd"))]
+#[cfg(not(feature = "simd"))]
 mod compute;
 
 mod seed_compute;

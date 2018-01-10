@@ -29,24 +29,24 @@ use std::io;
 use std::mem;
 use std::path::Path;
 use std::ptr;
-use self::stdsimd::simd::*;
+use self::stdsimd::simd::u32x8;
 
+#[allow(non_camel_case_types)]
 type u32s = u32x8;
 const U32S_WIDTH: usize = 8;
 
-const OFFSETS: u32s = u32s::new(
-	0,
-	1,
-	2,
-	3,
-	4,
-	5,
-	6,
-	7,
-);
-
-const fn index(n: u32) -> u32s {
-	u32s::splat(n * U32S_WIDTH as u32) + OFFSETS
+const fn index(i: u32) -> u32s {
+	// We can't extract this `i * ...` to a variable, Rust complains
+	u32s::new(
+		0 + i * U32S_WIDTH as u32,
+		1 + i * U32S_WIDTH as u32,
+		2 + i * U32S_WIDTH as u32,
+		3 + i * U32S_WIDTH as u32,
+		4 + i * U32S_WIDTH as u32,
+		5 + i * U32S_WIDTH as u32,
+		6 + i * U32S_WIDTH as u32,
+		7 + i * U32S_WIDTH as u32,
+	)
 }
 
 const ETHASH_DATASET_PARENTS_INDICES: [u32s; ETHASH_DATASET_PARENTS as usize / U32S_WIDTH] = [
@@ -61,7 +61,7 @@ const ETHASH_DATASET_PARENTS_INDICES: [u32s; ETHASH_DATASET_PARENTS as usize / U
 
 const ETHASH_ACCESSES_INDICES: [u32s; ETHASH_ACCESSES as usize / U32S_WIDTH] = [
 	index(0), index(1), index(2), index(3), index(4),
-	index(5), index(6), index(7), index(8),
+	index(5), index(6), index(7),
 ];
 
 const MIX_WORDS: usize = ETHASH_MIX_BYTES / 4;
@@ -124,10 +124,6 @@ impl Light {
 
 pub fn slow_hash_block_number(block_number: u64) -> H256 {
 	SeedHashCompute::resume_compute_seedhash([0u8; 32], 0, block_number / ETHASH_EPOCH_LENGTH)
-}
-
-fn fnv_hash(x: u32, y: u32) -> u32 {
-	return x.wrapping_mul(FNV_PRIME) ^ y;
 }
 
 fn fnv_hash_vec(x: u32s, y: u32s) -> u32s {
@@ -240,7 +236,7 @@ fn hash_compute(light: &Light, full_size: usize, header_hash: &H256, nonce: u64)
 	let mut mix: [_; MIX_NODES] = [buf.half_mix.clone(), buf.half_mix.clone()];
 
 	let page_size = 4 * MIX_WORDS;
-	let num_full_pages = u32s::splat((full_size / page_size) as u32);
+	let num_full_pages = (full_size / page_size) as u32;
 	// deref once for better performance
 	let cache: &[Node] = light.cache.as_ref();
 	let first_val = u32s::splat(buf.half_mix.as_words()[0]);
@@ -249,24 +245,27 @@ fn hash_compute(light: &Light, full_size: usize, header_hash: &H256, nonce: u64)
 	debug_assert_eq!(NODE_WORDS / U32S_WIDTH, 2);
 
 	for i in 0..(ETHASH_ACCESSES / U32S_WIDTH) as u32 {
-		let indices = {
-			// This is trivially safe, but does not work on big-endian. The safety of this is
-			// asserted in debug builds (see the definition of `make_const_array!`).
-			let mix_words: &mut [u32; MIX_WORDS] =
-				unsafe { make_const_array!(MIX_WORDS, &mut mix) };
+		let precalc = (first_val ^ ETHASH_ACCESSES_INDICES[i as usize]) * FNV_PRIME_VEC;
+		let i = i * U32S_WIDTH as u32;
 
-			fnv_hash_vec(
-				first_val ^ ETHASH_ACCESSES_INDICES[i],
-				unsafe { u32s::load_unchecked(mix_words, i as usize % MIX_WORDS) },
-			) % num_full_pages
-		};
+		for j in 0..U32S_WIDTH as u32 {
+			let index = {
+				// This is trivially safe, but does not work on big-endian. The safety of this is
+				// asserted in debug builds (see the definition of `make_const_array!`).
+				let mix_words: &mut [u32; MIX_WORDS] =
+					unsafe { make_const_array!(MIX_WORDS, &mut mix) };
 
-		for j in 0..U32S_WIDTH {
+				(
+					unsafe { precalc.extract_unchecked(j) } ^
+						mix_words[(i + j) as usize % MIX_WORDS]
+				) % num_full_pages
+			};
+
 			unroll! {
 				// MIX_NODES
 				for n in 0..2 {
 					let tmp_node = calculate_dag_item(
-						indices.extract_unchecked(j) * MIX_NODES as u32 + n as u32,
+						index * MIX_NODES as u32 + n as u32,
 						cache,
 					);
 
@@ -361,9 +360,6 @@ fn hash_compute(light: &Light, full_size: usize, header_hash: &H256, nonce: u64)
 
 // TODO: Use the `simd` crate
 fn calculate_dag_item(node_index: u32, cache: &[Node]) -> Node {
-	use typenum::U8;
-	use typenum_loops::Loop;
-
 	let num_parent_nodes = cache.len() as u32;
 
 	let mut ret = cache[(node_index % num_parent_nodes) as usize].clone();
@@ -375,18 +371,18 @@ fn calculate_dag_item(node_index: u32, cache: &[Node]) -> Node {
 
 	let node_index = u32s::splat(node_index);
 
-	U8::partial_unroll(ETHASH_DATASET_PARENTS / U32S_WIDTH as u32, &mut |i| {
-		let precalc = (node_index ^ ETHASH_DATASET_PARENTS_INDICES[i]) * FNV_PRIME_VEC;
+	for i in 0..ETHASH_DATASET_PARENTS / U32S_WIDTH as u32 {
+		let precalc = (node_index ^ ETHASH_DATASET_PARENTS_INDICES[i as usize]) * FNV_PRIME_VEC;
 
-		let i = i * U32S_WIDTH;
+		let i = i * U32S_WIDTH as u32;
 
 		// Rolling this loop is faster than unrolling it
-		for j in 0..U32S_WIDTH {
+		for j in 0..U32S_WIDTH as u32 {
 			let parent = &cache[
 				(
 					(
 						unsafe { precalc.extract_unchecked(j as u32) } ^
-							ret.as_words()[(i + j) % NODE_WORDS]
+							ret.as_words()[(i + j) as usize % NODE_WORDS]
 					) % num_parent_nodes
 				) as usize
 			];
@@ -405,7 +401,7 @@ fn calculate_dag_item(node_index: u32, cache: &[Node]) -> Node {
 				}
 			}
 		}
-	});
+	}
 
 	keccak_512::inplace(ret.as_bytes_mut());
 
