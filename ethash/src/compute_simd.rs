@@ -32,7 +32,6 @@ use std::ptr;
 use self::stdsimd::simd::*;
 
 type u32s = u32x8;
-
 const U32S_WIDTH: usize = 8;
 
 const MIX_WORDS: usize = ETHASH_MIX_BYTES / 4;
@@ -338,39 +337,19 @@ fn calculate_dag_item(node_index: u32, cache: &[Node]) -> Node {
 		6,
 		7,
 	);
-	const INDICES: [u32x8; ETHASH_DATASET_PARENTS as usize / U32S_WIDTH] = [
-		u32s::splat(0 * U32S_WIDTH as u32),
-		u32s::splat(1 * U32S_WIDTH as u32),
-		u32s::splat(2 * U32S_WIDTH as u32),
-		u32s::splat(3 * U32S_WIDTH as u32),
-		u32s::splat(4 * U32S_WIDTH as u32),
-		u32s::splat(5 * U32S_WIDTH as u32),
-		u32s::splat(6 * U32S_WIDTH as u32),
-		u32s::splat(7 * U32S_WIDTH as u32),
-		u32s::splat(8 * U32S_WIDTH as u32),
-		u32s::splat(9 * U32S_WIDTH as u32),
-		u32s::splat(10 * U32S_WIDTH as u32),
-		u32s::splat(11 * U32S_WIDTH as u32),
-		u32s::splat(12 * U32S_WIDTH as u32),
-		u32s::splat(13 * U32S_WIDTH as u32),
-		u32s::splat(14 * U32S_WIDTH as u32),
-		u32s::splat(15 * U32S_WIDTH as u32),
-		u32s::splat(16 * U32S_WIDTH as u32),
-		u32s::splat((16 + 1) * U32S_WIDTH as u32),
-		u32s::splat((16 + 2) * U32S_WIDTH as u32),
-		u32s::splat((16 + 3) * U32S_WIDTH as u32),
-		u32s::splat((16 + 4) * U32S_WIDTH as u32),
-		u32s::splat((16 + 5) * U32S_WIDTH as u32),
-		u32s::splat((16 + 6) * U32S_WIDTH as u32),
-		u32s::splat((16 + 7) * U32S_WIDTH as u32),
-		u32s::splat((16 + 8) * U32S_WIDTH as u32),
-		u32s::splat((16 + 9) * U32S_WIDTH as u32),
-		u32s::splat((16 + 10) * U32S_WIDTH as u32),
-		u32s::splat((16 + 11) * U32S_WIDTH as u32),
-		u32s::splat((16 + 12) * U32S_WIDTH as u32),
-		u32s::splat((16 + 13) * U32S_WIDTH as u32),
-		u32s::splat((16 + 14) * U32S_WIDTH as u32),
-		u32s::splat((16 + 15) * U32S_WIDTH as u32),
+
+	const fn index(n: u32) -> u32s {
+		u32s::splat(n * U32S_WIDTH as u32) + OFFSETS
+	}
+
+	const INDICES: [u32s; ETHASH_DATASET_PARENTS as usize / U32S_WIDTH] = [
+		index(0), index(1), index(2), index(3), index(4),
+		index(5), index(6), index(7), index(8), index(9),
+		index(10), index(11), index(12), index(13), index(14),
+		index(15), index(16), index(17), index(18), index(19),
+		index(20), index(21), index(22), index(23), index(24),
+		index(25), index(26), index(27), index(28), index(29),
+		index(30), index(31),
 	];
 
 	debug_assert_eq!(NODE_WORDS, 16);
@@ -380,8 +359,10 @@ fn calculate_dag_item(node_index: u32, cache: &[Node]) -> Node {
 	let node_index = u32s::splat(node_index);
 
 	for i in 0..(ETHASH_DATASET_PARENTS / U32S_WIDTH as u32) as usize {
-		let precalc = (node_index ^ (INDICES[i] + OFFSETS)) * FNV_PRIME_VEC;
+		let precalc = (node_index ^ INDICES[i]) * FNV_PRIME_VEC;
 
+		// This is optimised to a shift so we don't need to worry about the `[i]` inhibiting the
+		// optimisation of this range iter into a `i += U32S_WIDTH` - it's fast anyway
 		let i = i * U32S_WIDTH;
 
 		debug_assert_eq!(U32S_WIDTH, 8);
