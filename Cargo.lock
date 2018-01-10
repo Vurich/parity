@@ -307,6 +307,11 @@ dependencies = [
 ]
 
 [[package]]
+name = "coresimd"
+version = "0.0.3"
+source = "git+https://github.com/rust-lang-nursery/stdsimd.git#6ef0ae27aaa087b97b9482f22eaf8c9ed6cf9853"
+
+[[package]]
 name = "crossbeam"
 version = "0.2.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -454,12 +459,12 @@ version = "1.9.0"
 dependencies = [
  "crunchy 0.1.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "either 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "faster 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "keccak-hash 0.1.0",
  "log 0.3.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "memmap 0.5.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "parking_lot 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "primal 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "stdsimd 0.0.3 (git+https://github.com/rust-lang-nursery/stdsimd.git)",
 ]
 
 [[package]]
@@ -905,14 +910,6 @@ name = "evmjit"
 version = "1.9.0"
 dependencies = [
  "tiny-keccak 1.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
-]
-
-[[package]]
-name = "faster"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-dependencies = [
- "stdsimd 0.0.3 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -3008,7 +3005,10 @@ dependencies = [
 [[package]]
 name = "stdsimd"
 version = "0.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
+source = "git+https://github.com/rust-lang-nursery/stdsimd.git#6ef0ae27aaa087b97b9482f22eaf8c9ed6cf9853"
+dependencies = [
+ "coresimd 0.0.3 (git+https://github.com/rust-lang-nursery/stdsimd.git)",
+]
 
 [[package]]
 name = "strsim"
@@ -3600,6 +3600,7 @@ dependencies = [
 "checksum cookie 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)" = "d53b80dde876f47f03cda35303e368a79b91c70b0d65ecba5fd5280944a08591"
 "checksum core-foundation 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)" = "25bfd746d203017f7d5cbd31ee5d8e17f94b6521c7af77ece6c9e4b2d4b16c67"
 "checksum core-foundation-sys 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)" = "065a5d7ffdcbc8fa145d6f0746f3555025b9097a9e9cda59f7467abae670c78d"
+"checksum coresimd 0.0.3 (git+https://github.com/rust-lang-nursery/stdsimd.git)" = "<none>"
 "checksum crossbeam 0.2.10 (registry+https://github.com/rust-lang/crates.io-index)" = "0c5ea215664ca264da8a9d9c3be80d2eaf30923c259d03e870388eb927508f97"
 "checksum crunchy 0.1.6 (registry+https://github.com/rust-lang/crates.io-index)" = "a2f4a431c5c9f662e1200b7c7f02c34e91361150e382089a8f2dec3ba680cbda"
 "checksum crypt32-sys 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)" = "e34988f7e069e0b2f3bfc064295161e489b2d4e04a2e4248fb94360cdf00b4ec"
@@ -3618,7 +3619,6 @@ dependencies = [
 "checksum eth-secp256k1 0.5.7 (git+https://github.com/paritytech/rust-secp256k1)" = "<none>"
 "checksum ethabi 4.0.1 (registry+https://github.com/rust-lang/crates.io-index)" = "c819a3adef0413a2519cbd9a19a35dd1c20c7a0110705beaba8aa4aa87eda95f"
 "checksum ethcore-bigint 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)" = "bcb5af77e74a8f70e9c3337e069c37bc82178ef1b459c02091f73c4ad5281eb5"
-"checksum faster 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)" = "9d92e74aca39f128b924cf0da8c4a2701f4974309d0b63064df85d0e905e860b"
 "checksum fdlimit 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)" = "b1ee15a7050e5580b3712877157068ea713b245b080ff302ae2ca973cfcd9baa"
 "checksum flate2 0.2.20 (registry+https://github.com/rust-lang/crates.io-index)" = "e6234dd4468ae5d1e2dbb06fe2b058696fdc50a339c68a393aefbf00bc81e423"
 "checksum fnv 1.0.5 (registry+https://github.com/rust-lang/crates.io-index)" = "6cc484842f1e2884faf56f529f960cc12ad8c71ce96cc7abba0a067c98fee344"
@@ -3786,7 +3786,7 @@ dependencies = [
 "checksum snappy-sys 0.1.0 (git+https://github.com/paritytech/rust-snappy)" = "<none>"
 "checksum spmc 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)" = "cd1f11d1fb5fd41834e55ce0b85a186efbf2f2afd9fdb09e2c8d72f9bff1ad1a"
 "checksum stable_deref_trait 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)" = "15132e0e364248108c5e2c02e3ab539be8d6f5d52a01ca9bbf27ed657316f02b"
-"checksum stdsimd 0.0.3 (registry+https://github.com/rust-lang/crates.io-index)" = "6a84ef94a4d8e80a963663034812f147a5d830609547be1c27e05a0793fe3be1"
+"checksum stdsimd 0.0.3 (git+https://github.com/rust-lang-nursery/stdsimd.git)" = "<none>"
 "checksum strsim 0.6.0 (registry+https://github.com/rust-lang/crates.io-index)" = "b4d15c810519a91cf877e7e36e63fe068815c678181439f2f29e2562147c3694"
 "checksum subtle 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "7b811576c12506ff3f6da145585dc833edc32ee34c9fc021127d90e8134cc05c"
 "checksum syn 0.11.11 (registry+https://github.com/rust-lang/crates.io-index)" = "d3b891b9015c88c576343b9b3e41c2c11a51c219ef067b264bd9c8aa9b441dad"

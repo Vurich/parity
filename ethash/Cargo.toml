@@ -13,10 +13,8 @@ parking_lot = "0.4"
 crunchy = "0.1.0"
 memmap = "0.5.2"
 either = "1.0.0"
-faster = "*"
+stdsimd = { git = "https://github.com/rust-lang-nursery/stdsimd.git", optional = true }
 
 [features]
 benches = []
-
-[replace]
-"https://github.com/rust-lang-nursery/stdsimd.git#stdsimd:0.0.3" = { git = "https://github.com/Vurich/stdsimd.git" }
+simd = ["stdsimd"]

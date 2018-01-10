@@ -19,7 +19,6 @@
 extern crate primal;
 extern crate parking_lot;
 extern crate either;
-extern crate faster;
 extern crate memmap;
 
 #[macro_use]
@@ -27,7 +26,14 @@ extern crate crunchy;
 #[macro_use]
 extern crate log;
 
+#[cfg(features = "simd")]
+mod compute_simd;
+#[cfg(features = "simd")]
+use self::compute_simd as compute;
+
+#[cfg(not(features = "simd"))]
 mod compute;
+
 mod seed_compute;
 mod cache;
 mod keccak;

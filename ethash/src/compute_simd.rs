@@ -19,19 +19,26 @@
 
 // TODO: fix endianess for big endian
 
+extern crate stdsimd;
+
 use keccak::{keccak_512, keccak_256, H256};
 use cache::{NodeCache, NodeCacheBuilder};
 use seed_compute::SeedHashCompute;
 use shared::*;
 use std::io;
-
 use std::mem;
 use std::path::Path;
 use std::ptr;
+use self::stdsimd::simd::*;
+
+type u32s = u32x8;
+
+const U32S_WIDTH: usize = 8;
 
 const MIX_WORDS: usize = ETHASH_MIX_BYTES / 4;
 const MIX_NODES: usize = MIX_WORDS / NODE_WORDS;
 const FNV_PRIME: u32 = 0x01000193;
+const FNV_PRIME_VEC: u32s = u32s::splat(FNV_PRIME);
 
 /// Computation result
 pub struct ProofOfWork {
@@ -92,6 +99,10 @@ pub fn slow_hash_block_number(block_number: u64) -> H256 {
 
 fn fnv_hash(x: u32, y: u32) -> u32 {
 	return x.wrapping_mul(FNV_PRIME) ^ y;
+}
+
+fn fnv_hash_vec(x: u32s, y: u32s) -> u32s {
+	return x * FNV_PRIME_VEC ^ y;
 }
 
 /// Difficulty quick check for POW preverification
@@ -206,7 +217,7 @@ fn hash_compute(light: &Light, full_size: usize, header_hash: &H256, nonce: u64)
 	let first_val = buf.half_mix.as_words()[0];
 
 	debug_assert_eq!(MIX_NODES, 2);
-	debug_assert_eq!(NODE_WORDS, 16);
+	debug_assert_eq!(NODE_WORDS / U32S_WIDTH, 2);
 
 	for i in 0..ETHASH_ACCESSES as u32 {
 		let index = {
@@ -226,14 +237,15 @@ fn hash_compute(light: &Light, full_size: usize, header_hash: &H256, nonce: u64)
 					cache,
 				);
 
+				// NODE_WORDS / U32S_WIDTH
 				unroll! {
-					// NODE_WORDS
-					for w in 0..16 {
-						mix[n].as_words_mut()[w] =
-							fnv_hash(
-								mix[n].as_words()[w],
-								tmp_node.as_words()[w],
-							);
+					for w in 0..2 {
+						unsafe {
+							let mix_vec = u32s::load_unchecked(mix[n].as_words(), w * U32S_WIDTH);
+							let tmp_vec = u32s::load_unchecked(tmp_node.as_words(), w * U32S_WIDTH);
+							let hash = fnv_hash_vec(mix_vec, tmp_vec);
+							hash.store_unchecked(mix[n].as_words_mut(), w * U32S_WIDTH);
+						}
 					}
 				}
 			}
@@ -252,16 +264,38 @@ fn hash_compute(light: &Light, full_size: usize, header_hash: &H256, nonce: u64)
 
 		// Compress mix
 		debug_assert_eq!(MIX_WORDS / 4, 8);
-		unroll! {
-			for i in 0..8 {
-				let w = i * 4;
 
-				let mut reduction = mix_words[w + 0];
-				reduction = reduction.wrapping_mul(FNV_PRIME) ^ mix_words[w + 1];
-				reduction = reduction.wrapping_mul(FNV_PRIME) ^ mix_words[w + 2];
-				reduction = reduction.wrapping_mul(FNV_PRIME) ^ mix_words[w + 3];
-				compress[i] = reduction;
-			}
+		let steps = {
+			let make_mix_vec = |offset| {
+				u32s::new(
+					mix_words[offset],
+					mix_words[offset + 4],
+					mix_words[offset + 8],
+					mix_words[offset + 12],
+					mix_words[offset + 16],
+					mix_words[offset + 20],
+					mix_words[offset + 24],
+					mix_words[offset + 28],
+				)
+			};
+
+			(
+				make_mix_vec(0),
+				make_mix_vec(1),
+				make_mix_vec(2),
+				make_mix_vec(3),
+			)
+		};
+
+		let reduction = {
+ 			let mut reduction = steps.0;
+			reduction = fnv_hash_vec(reduction, steps.1);
+			reduction = fnv_hash_vec(reduction, steps.2);
+			fnv_hash_vec(reduction, steps.3)
+		};
+
+		unsafe {
+			reduction.store_unchecked(compress, 0);
 		}
 	}
 
@@ -287,21 +321,92 @@ fn hash_compute(light: &Light, full_size: usize, header_hash: &H256, nonce: u64)
 
 // TODO: Use the `simd` crate
 fn calculate_dag_item(node_index: u32, cache: &[Node]) -> Node {
-	let num_parent_nodes = cache.len();
-	let mut ret = cache[node_index as usize % num_parent_nodes].clone();
+	let num_parent_nodes = cache.len() as u32;
+
+	let mut ret = cache[(node_index % num_parent_nodes) as usize].clone();
 	ret.as_words_mut()[0] ^= node_index;
 
 	keccak_512::inplace(ret.as_bytes_mut());
 
-	debug_assert_eq!(NODE_WORDS, 16);
-	for i in 0..ETHASH_DATASET_PARENTS as u32 {
-		let parent_index = fnv_hash(node_index ^ i, ret.as_words()[i as usize % NODE_WORDS]) %
-			num_parent_nodes as u32;
-		let parent = &cache[parent_index as usize];
+	const OFFSETS: u32s = u32s::new(
+		0,
+		1,
+		2,
+		3,
+		4,
+		5,
+		6,
+		7,
+	);
+	const INDICES: [u32x8; ETHASH_DATASET_PARENTS as usize / U32S_WIDTH] = [
+		u32s::splat(0 * U32S_WIDTH as u32),
+		u32s::splat(1 * U32S_WIDTH as u32),
+		u32s::splat(2 * U32S_WIDTH as u32),
+		u32s::splat(3 * U32S_WIDTH as u32),
+		u32s::splat(4 * U32S_WIDTH as u32),
+		u32s::splat(5 * U32S_WIDTH as u32),
+		u32s::splat(6 * U32S_WIDTH as u32),
+		u32s::splat(7 * U32S_WIDTH as u32),
+		u32s::splat(8 * U32S_WIDTH as u32),
+		u32s::splat(9 * U32S_WIDTH as u32),
+		u32s::splat(10 * U32S_WIDTH as u32),
+		u32s::splat(11 * U32S_WIDTH as u32),
+		u32s::splat(12 * U32S_WIDTH as u32),
+		u32s::splat(13 * U32S_WIDTH as u32),
+		u32s::splat(14 * U32S_WIDTH as u32),
+		u32s::splat(15 * U32S_WIDTH as u32),
+		u32s::splat(16 * U32S_WIDTH as u32),
+		u32s::splat((16 + 1) * U32S_WIDTH as u32),
+		u32s::splat((16 + 2) * U32S_WIDTH as u32),
+		u32s::splat((16 + 3) * U32S_WIDTH as u32),
+		u32s::splat((16 + 4) * U32S_WIDTH as u32),
+		u32s::splat((16 + 5) * U32S_WIDTH as u32),
+		u32s::splat((16 + 6) * U32S_WIDTH as u32),
+		u32s::splat((16 + 7) * U32S_WIDTH as u32),
+		u32s::splat((16 + 8) * U32S_WIDTH as u32),
+		u32s::splat((16 + 9) * U32S_WIDTH as u32),
+		u32s::splat((16 + 10) * U32S_WIDTH as u32),
+		u32s::splat((16 + 11) * U32S_WIDTH as u32),
+		u32s::splat((16 + 12) * U32S_WIDTH as u32),
+		u32s::splat((16 + 13) * U32S_WIDTH as u32),
+		u32s::splat((16 + 14) * U32S_WIDTH as u32),
+		u32s::splat((16 + 15) * U32S_WIDTH as u32),
+	];
 
+	debug_assert_eq!(NODE_WORDS, 16);
+	debug_assert_eq!(NODE_WORDS % U32S_WIDTH, 0);
+	debug_assert_eq!(ETHASH_DATASET_PARENTS % U32S_WIDTH as u32, 0);
+
+	let node_index = u32s::splat(node_index);
+
+	for i in 0..(ETHASH_DATASET_PARENTS / U32S_WIDTH as u32) as usize {
+		let precalc = (node_index ^ (INDICES[i] + OFFSETS)) * FNV_PRIME_VEC;
+
+		let i = i * U32S_WIDTH;
+
+		debug_assert_eq!(U32S_WIDTH, 8);
 		unroll! {
-			for w in 0..16 {
-				ret.as_words_mut()[w] = fnv_hash(ret.as_words()[w], parent.as_words()[w]);
+			// U32S_WIDTH
+			for j in 0..8 {
+				let parent = &cache[
+					(
+						(
+							unsafe { precalc.extract_unchecked(j as u32) } ^
+								ret.as_words()[(i + j) % NODE_WORDS]
+						) % num_parent_nodes
+					) as usize
+				];
+
+				unroll! {
+					for k in 0..2 {
+						unsafe {
+							let a = u32s::load_unchecked(ret.as_words(), k * U32S_WIDTH);
+							let b = u32s::load_unchecked(parent.as_words(), k * U32S_WIDTH);
+
+							fnv_hash_vec(a, b).store(ret.as_words_mut(), k * U32S_WIDTH);
+						}
+					}
+				}
 			}
 		}
 	}
