@@ -18,4 +18,4 @@ stdsimd = { path = "../../stdsimd", optional = true }
 [features]
 benches = []
 simd = ["stdsimd"]
-default = ["simd"]
+default = []
