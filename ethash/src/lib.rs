@@ -20,6 +20,8 @@ extern crate primal;
 extern crate parking_lot;
 extern crate either;
 extern crate memmap;
+extern crate typenum;
+extern crate typenum_loops;
 
 #[macro_use]
 extern crate crunchy;

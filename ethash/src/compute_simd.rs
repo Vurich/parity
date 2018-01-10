@@ -320,6 +320,9 @@ fn hash_compute(light: &Light, full_size: usize, header_hash: &H256, nonce: u64)
 
 // TODO: Use the `simd` crate
 fn calculate_dag_item(node_index: u32, cache: &[Node]) -> Node {
+	use typenum::U8;
+	use typenum_loops::Loop;
+
 	let num_parent_nodes = cache.len() as u32;
 
 	let mut ret = cache[(node_index % num_parent_nodes) as usize].clone();
@@ -352,45 +355,41 @@ fn calculate_dag_item(node_index: u32, cache: &[Node]) -> Node {
 		index(30), index(31),
 	];
 
-	debug_assert_eq!(NODE_WORDS, 16);
-	debug_assert_eq!(NODE_WORDS % U32S_WIDTH, 0);
 	debug_assert_eq!(ETHASH_DATASET_PARENTS % U32S_WIDTH as u32, 0);
 
 	let node_index = u32s::splat(node_index);
 
-	// Yes, unrolling these loops really does help! It's a small, but consistent improvement of
-	// ~1-2%.
-	assert_eq!(ETHASH_DATASET_PARENTS / U32S_WIDTH as u32, 32);
-	unroll! {
-		// ETHASH_DATASET_PARENTS / U32S_WIDTH as u32
-		for i in 0..32 {
-			let precalc = (node_index ^ INDICES[i]) * FNV_PRIME_VEC;
+	U8::partial_unroll(ETHASH_DATASET_PARENTS / U32S_WIDTH as u32, &mut |i| {
+		let precalc = (node_index ^ INDICES[i]) * FNV_PRIME_VEC;
 
-			let i = i * U32S_WIDTH;
+		let i = i * U32S_WIDTH;
 
-			for j in 0..U32S_WIDTH {
-				let parent = &cache[
+		// Rolling this loop is faster than unrolling it
+		for j in 0..U32S_WIDTH {
+			let parent = &cache[
+				(
 					(
-						(
-							unsafe { precalc.extract_unchecked(j as u32) } ^
-								ret.as_words()[(i + j) % NODE_WORDS]
-						) % num_parent_nodes
-					) as usize
-				];
+						unsafe { precalc.extract_unchecked(j as u32) } ^
+							ret.as_words()[(i + j) % NODE_WORDS]
+					) % num_parent_nodes
+				) as usize
+			];
 
-				unroll! {
-					for k in 0..2 {
-						unsafe {
-							let a = u32s::load_unchecked(ret.as_words(), k * U32S_WIDTH);
-							let b = u32s::load_unchecked(parent.as_words(), k * U32S_WIDTH);
+			debug_assert_eq!(NODE_WORDS % U32S_WIDTH, 0);
+			debug_assert_eq!(NODE_WORDS / U32S_WIDTH, 2);
+			unroll! {
+				// NODE_WORDS / U32S_WIDTH
+				for k in 0..2 {
+					unsafe {
+						let a = u32s::load_unchecked(ret.as_words(), k * U32S_WIDTH);
+						let b = u32s::load_unchecked(parent.as_words(), k * U32S_WIDTH);
 
-							fnv_hash_vec(a, b).store(ret.as_words_mut(), k * U32S_WIDTH);
-						}
+						fnv_hash_vec(a, b).store(ret.as_words_mut(), k * U32S_WIDTH);
 					}
 				}
 			}
 		}
-	}
+	});
 
 	keccak_512::inplace(ret.as_bytes_mut());
 
