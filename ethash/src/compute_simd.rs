@@ -34,6 +34,36 @@ use self::stdsimd::simd::*;
 type u32s = u32x8;
 const U32S_WIDTH: usize = 8;
 
+const OFFSETS: u32s = u32s::new(
+	0,
+	1,
+	2,
+	3,
+	4,
+	5,
+	6,
+	7,
+);
+
+const fn index(n: u32) -> u32s {
+	u32s::splat(n * U32S_WIDTH as u32) + OFFSETS
+}
+
+const ETHASH_DATASET_PARENTS_INDICES: [u32s; ETHASH_DATASET_PARENTS as usize / U32S_WIDTH] = [
+	index(0), index(1), index(2), index(3), index(4),
+	index(5), index(6), index(7), index(8), index(9),
+	index(10), index(11), index(12), index(13), index(14),
+	index(15), index(16), index(17), index(18), index(19),
+	index(20), index(21), index(22), index(23), index(24),
+	index(25), index(26), index(27), index(28), index(29),
+	index(30), index(31),
+];
+
+const ETHASH_ACCESSES_INDICES: [u32s; ETHASH_ACCESSES as usize / U32S_WIDTH] = [
+	index(0), index(1), index(2), index(3), index(4),
+	index(5), index(6), index(7), index(8),
+];
+
 const MIX_WORDS: usize = ETHASH_MIX_BYTES / 4;
 const MIX_NODES: usize = MIX_WORDS / NODE_WORDS;
 const FNV_PRIME: u32 = 0x01000193;
@@ -210,40 +240,51 @@ fn hash_compute(light: &Light, full_size: usize, header_hash: &H256, nonce: u64)
 	let mut mix: [_; MIX_NODES] = [buf.half_mix.clone(), buf.half_mix.clone()];
 
 	let page_size = 4 * MIX_WORDS;
-	let num_full_pages = (full_size / page_size) as u32;
+	let num_full_pages = u32s::splat((full_size / page_size) as u32);
 	// deref once for better performance
 	let cache: &[Node] = light.cache.as_ref();
-	let first_val = buf.half_mix.as_words()[0];
+	let first_val = u32s::splat(buf.half_mix.as_words()[0]);
 
 	debug_assert_eq!(MIX_NODES, 2);
 	debug_assert_eq!(NODE_WORDS / U32S_WIDTH, 2);
 
-	for i in 0..ETHASH_ACCESSES as u32 {
-		let index = {
+	for i in 0..(ETHASH_ACCESSES / U32S_WIDTH) as u32 {
+		let indices = {
 			// This is trivially safe, but does not work on big-endian. The safety of this is
 			// asserted in debug builds (see the definition of `make_const_array!`).
 			let mix_words: &mut [u32; MIX_WORDS] =
 				unsafe { make_const_array!(MIX_WORDS, &mut mix) };
 
-			fnv_hash(first_val ^ i, mix_words[i as usize % MIX_WORDS]) % num_full_pages
+			fnv_hash_vec(
+				first_val ^ ETHASH_ACCESSES_INDICES[i],
+				unsafe { u32s::load_unchecked(mix_words, i as usize % MIX_WORDS) },
+			) % num_full_pages
 		};
 
-		unroll! {
-			// MIX_NODES
-			for n in 0..2 {
-				let tmp_node = calculate_dag_item(
-					index * MIX_NODES as u32 + n as u32,
-					cache,
-				);
+		for j in 0..U32S_WIDTH {
+			unroll! {
+				// MIX_NODES
+				for n in 0..2 {
+					let tmp_node = calculate_dag_item(
+						indices.extract_unchecked(j) * MIX_NODES as u32 + n as u32,
+						cache,
+					);
 
-				// NODE_WORDS / U32S_WIDTH
-				unroll! {
-					for w in 0..2 {
-						unsafe {
-							let mix_vec = u32s::load_unchecked(mix[n].as_words(), w * U32S_WIDTH);
-							let tmp_vec = u32s::load_unchecked(tmp_node.as_words(), w * U32S_WIDTH);
-							let hash = fnv_hash_vec(mix_vec, tmp_vec);
-							hash.store_unchecked(mix[n].as_words_mut(), w * U32S_WIDTH);
+					// NODE_WORDS / U32S_WIDTH
+					unroll! {
+						for w in 0..2 {
+							unsafe {
+								let mix_vec = u32s::load_unchecked(
+									mix[n].as_words(),
+									w * U32S_WIDTH,
+								);
+								let tmp_vec = u32s::load_unchecked(
+									tmp_node.as_words(),
+									w * U32S_WIDTH,
+								);
+								let hash = fnv_hash_vec(mix_vec, tmp_vec);
+								hash.store_unchecked(mix[n].as_words_mut(), w * U32S_WIDTH);
+							}
 						}
 					}
 				}
@@ -330,37 +371,12 @@ fn calculate_dag_item(node_index: u32, cache: &[Node]) -> Node {
 
 	keccak_512::inplace(ret.as_bytes_mut());
 
-	const OFFSETS: u32s = u32s::new(
-		0,
-		1,
-		2,
-		3,
-		4,
-		5,
-		6,
-		7,
-	);
-
-	const fn index(n: u32) -> u32s {
-		u32s::splat(n * U32S_WIDTH as u32) + OFFSETS
-	}
-
-	const INDICES: [u32s; ETHASH_DATASET_PARENTS as usize / U32S_WIDTH] = [
-		index(0), index(1), index(2), index(3), index(4),
-		index(5), index(6), index(7), index(8), index(9),
-		index(10), index(11), index(12), index(13), index(14),
-		index(15), index(16), index(17), index(18), index(19),
-		index(20), index(21), index(22), index(23), index(24),
-		index(25), index(26), index(27), index(28), index(29),
-		index(30), index(31),
-	];
-
 	debug_assert_eq!(ETHASH_DATASET_PARENTS % U32S_WIDTH as u32, 0);
 
 	let node_index = u32s::splat(node_index);
 
 	U8::partial_unroll(ETHASH_DATASET_PARENTS / U32S_WIDTH as u32, &mut |i| {
-		let precalc = (node_index ^ INDICES[i]) * FNV_PRIME_VEC;
+		let precalc = (node_index ^ ETHASH_DATASET_PARENTS_INDICES[i]) * FNV_PRIME_VEC;
 
 		let i = i * U32S_WIDTH;
 
