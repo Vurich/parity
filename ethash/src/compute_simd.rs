@@ -248,41 +248,47 @@ fn hash_compute(light: &Light, full_size: usize, header_hash: &H256, nonce: u64)
 		let precalc = (first_val ^ ETHASH_ACCESSES_INDICES[i as usize]) * FNV_PRIME_VEC;
 		let i = i * U32S_WIDTH as u32;
 
-		for j in 0..U32S_WIDTH as u32 {
-			let index = {
-				// This is trivially safe, but does not work on big-endian. The safety of this is
-				// asserted in debug builds (see the definition of `make_const_array!`).
-				let mix_words: &mut [u32; MIX_WORDS] =
-					unsafe { make_const_array!(MIX_WORDS, &mut mix) };
+		unroll! {
+			// U32S_WIDTH
+			for j_usize in 0..8 {
+				let j = j_usize as u32;
 
-				(
-					unsafe { precalc.extract_unchecked(j) } ^
-						mix_words[(i + j) as usize % MIX_WORDS]
-				) % num_full_pages
-			};
+				let index = {
+					// This is trivially safe, but does not work cross-endian (i.e. writing to the
+					// file on LE and reading on BE). The safety of this is asserted in debug builds
+					// (see the definition of `make_const_array!`).
+					let mix_words: &mut [u32; MIX_WORDS] =
+						unsafe { make_const_array!(MIX_WORDS, &mut mix) };
 
-			unroll! {
-				// MIX_NODES
-				for n in 0..2 {
-					let tmp_node = calculate_dag_item(
-						index * MIX_NODES as u32 + n as u32,
-						cache,
-					);
+					(
+						unsafe { precalc.extract_unchecked(j) } ^
+							mix_words[(i + j) as usize % MIX_WORDS]
+					) % num_full_pages
+				};
 
-					// NODE_WORDS / U32S_WIDTH
-					unroll! {
-						for w in 0..2 {
-							unsafe {
-								let mix_vec = u32s::load_unchecked(
-									mix[n].as_words(),
-									w * U32S_WIDTH,
-								);
-								let tmp_vec = u32s::load_unchecked(
-									tmp_node.as_words(),
-									w * U32S_WIDTH,
-								);
-								let hash = fnv_hash_vec(mix_vec, tmp_vec);
-								hash.store_unchecked(mix[n].as_words_mut(), w * U32S_WIDTH);
+				unroll! {
+					// MIX_NODES
+					for n in 0..2 {
+						let tmp_node = calculate_dag_item(
+							index * MIX_NODES as u32 + n as u32,
+							cache,
+						);
+
+						// NODE_WORDS / U32S_WIDTH
+						unroll! {
+							for w in 0..2 {
+								unsafe {
+									let mix_vec = u32s::load_unchecked(
+										mix[n].as_words(),
+										w * U32S_WIDTH,
+									);
+									let tmp_vec = u32s::load_unchecked(
+										tmp_node.as_words(),
+										w * U32S_WIDTH,
+									);
+									let hash = fnv_hash_vec(mix_vec, tmp_vec);
+									hash.store_unchecked(mix[n].as_words_mut(), w * U32S_WIDTH);
+								}
 							}
 						}
 					}
@@ -376,27 +382,31 @@ fn calculate_dag_item(node_index: u32, cache: &[Node]) -> Node {
 
 		let i = i * U32S_WIDTH as u32;
 
-		// Rolling this loop is faster than unrolling it
-		for j in 0..U32S_WIDTH as u32 {
-			let parent = &cache[
-				(
+		unroll! {
+			// U32S_WIDTH
+			for j_usize in 0..8 {
+				let j = j_usize as u32;
+
+				let parent = &cache[
 					(
-						unsafe { precalc.extract_unchecked(j as u32) } ^
-							ret.as_words()[(i + j) as usize % NODE_WORDS]
-					) % num_parent_nodes
-				) as usize
-			];
+						(
+							unsafe { precalc.extract_unchecked(j as u32) } ^
+								ret.as_words()[(i + j) as usize % NODE_WORDS]
+						) % num_parent_nodes
+					) as usize
+				];
 
-			debug_assert_eq!(NODE_WORDS % U32S_WIDTH, 0);
-			debug_assert_eq!(NODE_WORDS / U32S_WIDTH, 2);
-			unroll! {
-				// NODE_WORDS / U32S_WIDTH
-				for k in 0..2 {
-					unsafe {
-						let a = u32s::load_unchecked(ret.as_words(), k * U32S_WIDTH);
-						let b = u32s::load_unchecked(parent.as_words(), k * U32S_WIDTH);
+				debug_assert_eq!(NODE_WORDS % U32S_WIDTH, 0);
+				debug_assert_eq!(NODE_WORDS / U32S_WIDTH, 2);
+				unroll! {
+					// NODE_WORDS / U32S_WIDTH
+					for k in 0..2 {
+						unsafe {
+							let a = u32s::load_unchecked(ret.as_words(), k * U32S_WIDTH);
+							let b = u32s::load_unchecked(parent.as_words(), k * U32S_WIDTH);
 
-						fnv_hash_vec(a, b).store(ret.as_words_mut(), k * U32S_WIDTH);
+							fnv_hash_vec(a, b).store(ret.as_words_mut(), k * U32S_WIDTH);
+						}
 					}
 				}
 			}
