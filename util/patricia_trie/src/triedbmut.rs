@@ -267,7 +267,7 @@ impl<'a> Index<&'a StorageHandle> for NodeStorage {
 /// Querying the root or dropping the trie will commit automatically.
 ///
 /// # Example
-/// ```
+/// ```rust
 /// extern crate patricia_trie as trie;
 /// extern crate keccak_hash;
 /// extern crate hashdb;
